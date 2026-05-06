@@ -2,6 +2,7 @@
 import { Pinecone } from '@pinecone-database/pinecone';
 import { readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
+import { franc } from 'franc';
 import 'dotenv/config';
 
 const pinecone = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
@@ -47,7 +48,7 @@ async function embedText(text) {
   }
 
   const data = await response.json();
-  console,log('Embedding reçu (longueur):', data.data[0].embedding.length);
+  console.log('Embedding reçu (longueur):', data.data[0].embedding.length);
   return data.data[0].embedding;
 }
 
@@ -80,8 +81,9 @@ async function embedBatch(texts) {
 
 async function processFile(filePath, indexName) {
   const index = pinecone.index(indexName);
-  const text = readFileSync(filePath, 'utf-8');
   const filename = filePath.split('/').pop();
+  const language = franc(text.slice(0, 1000)); // returns 'eng', 'fra', etc.
+  const indexedAt = new Date().toISOString();
 
   console.log(`\n→ Traitement de ${filename}...`);
 
@@ -105,7 +107,9 @@ async function processFile(filePath, indexName) {
         metadata: {
           text: batch[j],
           source: filename,
-          chunkIndex: i + j
+          chunkIndex: i + j,
+          language: language,
+          indexedAt: indexedAt
         }
       });
     });
