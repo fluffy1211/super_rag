@@ -82,6 +82,7 @@ async function embedBatch(texts) {
 async function processFile(filePath, indexName) {
   const index = pinecone.index(indexName);
   const filename = filePath.split('/').pop();
+  const text = readFileSync(filePath, 'utf-8');
   const language = franc(text.slice(0, 1000)); // returns 'eng', 'fra', etc.
   const indexedAt = new Date().toISOString();
 
