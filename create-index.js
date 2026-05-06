@@ -30,12 +30,50 @@ async function embedText(text) {
   // Endpoint : https://api.mistral.ai/v1/embeddings
   // Modèle : "mistral-embed"
   // Retourner le vecteur (tableau de nombres)
+  const response = await fetch('https://api.mistral.ai/v1/embeddings', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${process.env.MISTRAL_API_KEY}`
+    },
+    body: JSON.stringify({
+      model: 'mistral-embed',
+      input: text
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Embedding API error ${response.status}: ${await response.text()}`);
+  }
+
+  const data = await response.json();
+  console,log('Embedding reçu (longueur):', data.data[0].embedding.length);
+  return data.data[0].embedding;
 }
 
 async function embedBatch(texts) {
   // TODO : appeler l'API d'embedding avec plusieurs textes à la fois
   // L'API Mistral accepte un tableau dans "input"
   // Retourner un tableau de vecteurs dans le même ordre
+    const response = await fetch('https://api.mistral.ai/v1/embeddings', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${process.env.MISTRAL_API_KEY}`
+    },
+    body: JSON.stringify({
+      model: 'mistral-embed',
+      input: texts
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Embedding API error ${response.status}: ${await response.text()}`);
+  }
+
+  const data = await response.json();
+  console.log(`Batch embedding reçu pour ${texts.length} textes.`);
+  return data.data.map(item => item.embedding);
 }
 
 // --- Traitement d'un fichier ---
@@ -59,6 +97,20 @@ async function processFile(filePath, indexName) {
     // TODO : embedder chaque chunk du batch en parallèle avec Promise.all
     // Construire un tableau de vecteurs Pinecone :
     // { id: `${filename}-chunk-${index}`, values: vecteur, metadata: { text, source, chunkIndex } }
+        const embeddings = await embedBatch(batch);
+    embeddings.forEach((embedding, j) => {
+      vectors.push({
+        id: `${filename}-chunk-${i + j}`,
+        values: embedding,
+        metadata: {
+          text: batch[j],
+          source: filename,
+          chunkIndex: i + j
+        }
+      });
+    });
+
+    console.log(`  Embeddé ${Math.min(i + EMBED_CONCURRENCY, rawChunks.length)}/${rawChunks.length} chunks...`);
   }
 
   // Upsert dans Pinecone par lots
@@ -66,9 +118,10 @@ async function processFile(filePath, indexName) {
     const batch = vectors.slice(i, i + BATCH_SIZE);
     // TODO : insérer le batch dans l'index Pinecone
     // Afficher la progression : "  Upsert 50/247 vecteurs..."
+    await index.upsert({ records: batch });
+    console.log(`  Upsert ${Math.min(i + BATCH_SIZE, vectors.length)}/${vectors.length} vecteurs...`);
   }
 
-  console.log(`  ✓ ${vectors.length} vecteurs indexés`);
   return vectors.length;
 }
 
@@ -88,6 +141,12 @@ async function main() {
   for (const file of files) {
     // TODO : appeler processFile et accumuler le total
     // Gérer l'erreur si un fichier plante (continuer les autres)
+    try {
+      const count = await processFile(file, INDEX_NAME);
+      total += count;
+    } catch (error) {
+      console.error(`Erreur lors du traitement de ${file}:`, error);
+    }
   }
 
   console.log(`\nIndexation terminée. ${total} vecteurs au total.`);
