@@ -11,6 +11,7 @@
     "dev": "nodemon agent.js"
   },
   "dependencies": {
+    "@pinecone-database/pinecone": "^7.2.0",
     "dotenv": "^17.4.2",
     "nodemon": "^3.1.14"
   }
