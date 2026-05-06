@@ -1,0 +1,29 @@
+Q1. Quelle version minimale de Python est requise pour installer PydanticAI ?
+→ Python 3.10+  (docs_install.md)
+
+Q2. Quelle bibliothèque externe PydanticAI utilise-t-il pour implémenter les retries HTTP ?
+→ tenacity  (docs_retries.md)
+
+Q3. Quels sont les deux décorateurs disponibles pour enregistrer des function tools sur un agent PydanticAI ?
+→ @agent.tool (avec accès au contexte RunContext) et @agent.tool_plain (sans contexte)  (docs_tools.md)
+
+Q4. Comment récupérer uniquement les messages du run courant (et non les runs précédents) depuis un RunResult ?
+→ result.new_messages()  (docs_message-history.md)
+
+Q5. Quel modèle de test doit-on utiliser à la place d'un vrai LLM pour éviter des appels réseau dans les tests unitaires PydanticAI ?
+→ TestModel (pydantic_ai.models.test.TestModel)  (docs_testing.md)
+
+Q6. Quelle commande pip/uv permet d'installer PydanticAI avec uniquement les dépendances pour OpenAI et Google, plus Logfire ?
+→ pip/uv-add "pydantic-ai-slim[openai,google,logfire]"  (docs_install.md)
+
+Q7. Comment configurer des retries pour un agent qui utilise le provider AWS Bedrock ?
+→ Ambiguïté : docs_retries.md dit d'utiliser boto3 Config (pas httpx/tenacity), mais docs_api_models_bedrock.md peut aussi couvrir ce sujet. Le bon chunk mentionne botocore.config.Config avec max_attempts et mode='adaptive'.
+
+Q8. Quelle est la différence entre utiliser un "function tool" et faire du RAG avec PydanticAI ?
+→ Ambiguïté : docs_tools.md dit que les tools sont "le R du RAG" et qu'ils sont plus généraux que la recherche vectorielle — mais docs_api_toolsets.md et docs_common-tools.md parlent aussi de toolsets et embeddings. Plusieurs chunks peuvent s'activer.
+
+Q9. Quel est le prix par million de tokens du modèle GPT-5.2 d'OpenAI ?
+→ Hors corpus : la doc PydanticAI n'inclut pas les tarifs des fournisseurs externes.
+
+Q10. Comment déployer un agent PydanticAI sur AWS Lambda avec une couche Lambda personnalisée ?
+→ Hors corpus : la documentation couvre Restate, Prefect et DBOS pour l'exécution durable, mais pas le déploiement serverless AWS Lambda spécifiquement.
