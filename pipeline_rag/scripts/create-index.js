@@ -122,6 +122,7 @@ async function main() {
 }
 
 export async function retrieveContext(query, topK = 5) {
+    const startTime = Date.now();
     const index = pinecone.index(process.env.PINECONE_INDEX_NAME);
     const queryEmbedding = await embedBatch([query]);
     const response = await index.query({
@@ -129,14 +130,18 @@ export async function retrieveContext(query, topK = 5) {
         topK,
         includeMetadata: true
     });
-    return response.matches
-        .filter(m => m.score >= 0.5)
-        .map(m => ({
-            text: m.metadata.text,
-            source: m.metadata.source,
-            score: m.score,
-            chunkIndex: m.metadata.chunkIndex
-        }));
+    const retrievalTime = Date.now() - startTime;
+    return {
+        matches: response.matches
+            .filter(m => m.score >= 0.5)
+            .map(m => ({
+                text: m.metadata.text,
+                source: m.metadata.source,
+                score: m.score,
+                chunkIndex: m.metadata.chunkIndex
+            })),
+        retrievalTime
+    };
 }
 
 // Retourne la réponse en texte (string) générée par Mistral à partir d'une question et d'un contexte (chunks récupérés).
@@ -149,6 +154,8 @@ export async function generateCompletion(query, context) {
 5. Si la demande est hors sujet (blague, opinion, fiction, ou toute requête sans lien avec les documents), réponds uniquement : "Requête hors sujet. Je réponds uniquement aux questions sur les documents fournis."`
 
     const userPrompt = `Question: ${query}\n\nContexte:\n${context.map((c, i) => `Chunk ${i + 1} (source: ${c.source}):\n${c.text}\n`).join('\n')}\n\nRéponse:`;
+
+    const start = Date.now();
 
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
@@ -170,19 +177,37 @@ export async function generateCompletion(query, context) {
         throw new Error(`Mistral completion error ${response.status}: ${await response.text()}`);
     }
 
+    const generationTime = Date.now() - start;
+
     const data = await response.json();
-    return data.choices[0].message.content.trim();
+    return {
+        data,
+        answer: data.choices[0].message.content.trim(),
+        generationTime
+    };
 }
 
+// Ajouter des metrics qui s'envoient a la fin telles que le topscore, le avgscore, le retrievalms, le generationsms, le prompttokens, le generations tokens et le costUSD.
 export async function ragQuery(questions, options = { topK: 5, verbose: false }) {
-    const context = await retrieveContext(questions, options.topK);
+    const { matches: context, retrievalTime } = await retrieveContext(questions, options.topK);
     if (options.verbose) {
         console.log('Context retrieved:');
         context.forEach((c, i) => {
             console.log(`Chunk ${i + 1} (source: ${c.source}, score: ${c.score.toFixed(4)}):\n${c.text}\n`);
         });
     }
-    const answer = await generateCompletion(questions, context);
+    const { answer, generationTime, data } = await generateCompletion(questions, context);
+    if (options.verbose) {
+        const metrics = {
+            topScore: context.length > 0 ? context[0].score : 0,
+            avgScore: context.reduce((sum, c) => sum + c.score, 0) / context.length || 0,
+            retrievalMs: retrievalTime,
+            generationMs: generationTime,
+            promptTokens: data.usage.prompt_tokens,
+            generationTokens: data.usage.completion_tokens,
+        };
+        console.log('Metrics:', metrics);
+    }
     return answer;
 }
 
@@ -192,3 +217,4 @@ console.log('Query: ', query);
 console.log('\nRAG answer: ', r1);
 
 main().catch(console.error);
+ 
