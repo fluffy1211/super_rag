@@ -1,11 +1,21 @@
 import { Pinecone } from '@pinecone-database/pinecone';
 import { readFileSync, readdirSync } from 'fs';
-import { join } from 'path';
+import { join, dirname } from 'path';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { franc } from 'franc';
-import 'dotenv/config';
+import dotenv from 'dotenv';
+
+import { callLLM, callEmbeddings, CircuitBreaker, withRetry } from '../llm.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+dotenv.config({ path: join(__dirname, '..', '..', '.env') });
+
+// Instance partagée du circuit breaker pour Mistral
+export const llmBreaker = new CircuitBreaker({ threshold: 5, timeout: 30000 });
 
 // Client Pinecone utilisé pour écrire les vecteurs dans l'index distant.
-const pinecone = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
+const pinecone = new Pinecone({ apiKey: process.env.PINECONE_API_KEY});
 
 // Découpe un texte en blocs ("chunks") de taille fixe avec chevauchement.
 // Le chevauchement permet de garder du contexte entre 2 chunks consécutifs.
@@ -41,21 +51,9 @@ export const CONFIG = { chunkSize: 400, overlap: 50, batchSize: 50, embedConcurr
 // Appelle l'API Mistral embeddings pour un lot de textes
 // et retourne un tableau de vecteurs numériques.
 export async function embedBatch(texts) {
-    const response = await fetch('https://api.mistral.ai/v1/embeddings', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${process.env.MISTRAL_API_KEY}`
-        },
-        body: JSON.stringify({ model: 'mistral-embed', input: texts })
-    });
-
-    if (!response.ok) {
-        throw new Error(`Mistral embedding error ${response.status}: ${await response.text()}`);
-    }
-
-    const data = await response.json();
-    return data.data.map(item => item.embedding);
+  return await llmBreaker.call(async () => {
+    return await callEmbeddings(texts);
+  });
 }
 
 // Transforme les chunks d'un fichier en vecteurs puis les envoie à Pinecone.
@@ -93,8 +91,8 @@ async function embedAndIndex(chunks, filename, index, progress) {
   }
 }
 
-// Dossier source des documents à indexer.
-const CORPUS_DIR = new URL('../corpus', import.meta.url).pathname;
+// Dossier source des documents à indexer
+const CORPUS_DIR = fileURLToPath(new URL('../corpus', import.meta.url));
 
 // Orchestration complète du pipeline d'indexation:
 // - lecture du corpus
@@ -102,8 +100,8 @@ const CORPUS_DIR = new URL('../corpus', import.meta.url).pathname;
 // - génération des embeddings
 // - insertion des vecteurs dans Pinecone
 
-// A commenter pour éviter de lancer l'indexation à chaque évaluation, mais à décommenter pour créer l'index initialement.
-async function main() {
+// Fonction d'indexation du corpus qui est appelé dans index-corpus.js.
+export async function main() {
   console.log('\nChargement du corpus...');
   const docs = loadCorpus(CORPUS_DIR);
 
@@ -160,29 +158,18 @@ export async function generateCompletion(query, context) {
 
     const start = Date.now();
 
-    const response = await fetch('https://api.mistral.ai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${process.env.MISTRAL_API_KEY}`
-        },
-        body: JSON.stringify({
-            model: 'mistral-small-latest',
-            messages: [
-                { role: 'system', content: systemPrompt },
-                { role: 'user', content: userPrompt }
-            ],
-            temperature: 0.1
-        })
+    const data = await llmBreaker.call(async () => {
+      return await callLLM([
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ], {
+        temperature: 0.1,
+        model: 'mistral-small-latest'
+      });
     });
-
-    if (!response.ok) {
-        throw new Error(`Mistral completion error ${response.status}: ${await response.text()}`);
-    }
 
     const generationTime = Date.now() - start;
 
-    const data = await response.json();
     return {
         data,
         answer: data.choices[0].message.content.trim(),
@@ -214,5 +201,36 @@ export async function ragQuery(questions, options = { topK: 5, verbose: false })
     return answer;
 }
 
-main().catch(console.error);
+
+// Fonction de test pour vérifier le circuit breaker
+export async function testCircuitBreaker() {
+  console.log('\n🧪 Test du Circuit Breaker:');
+  console.log('Lancement de 6 requêtes qui vont échouer...\n');
+  
+  for (let i = 1; i <= 7; i++) {
+    try {
+      console.log(`Requête ${i}:`);
+      // Simuler un appel qui échoue toujours
+      await llmBreaker.call(async () => {
+        throw new Error('429 rate limit simulé');
+      });
+    } catch (error) {
+      console.log(`  ❌ ${error.message}`);
+    }
+    
+    const state = llmBreaker.getState();
+    console.log(`  État circuit: ${state.state} (échecs: ${state.failureCount})`);
+    
+    if (i < 7) await new Promise(r => setTimeout(r, 500));
+  }
+  
+  console.log('\nAttente de réouverture...');
+  await new Promise(r => setTimeout(r, 31000));
+  
+  // Réinitialiser pour les tests normaux
+  llmBreaker.reset();
+  console.log('Circuit réinitialisé pour le fonctionnement normal\n');
+}
+
+
  
