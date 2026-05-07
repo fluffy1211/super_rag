@@ -11,9 +11,13 @@
     "dev": "nodemon agent.js"
   },
   "dependencies": {
-    "@pinecone-database/pinecone": "^7.2.0",
+    "@langchain/core": "^0.3.80",
+    "@langchain/mistralai": "^0.1.1",
+    "@langchain/pinecone": "^0.2.0",
+    "@pinecone-database/pinecone": "^5.1.2",
     "dotenv": "^17.4.2",
     "franc": "^6.2.0",
+    "langchain": "^0.3.37",
     "nodemon": "^3.1.14"
   }
 }
