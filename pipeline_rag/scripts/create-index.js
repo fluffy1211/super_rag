@@ -7,6 +7,12 @@ import dotenv from 'dotenv';
 
 import { callLLM, callEmbeddings, CircuitBreaker, withRetry } from '../llm.js';
 
+import { formatCostMessage, resetSessionStats, getSessionStats } from '../cost-tracker.js';
+
+import { computeConfidence, formatConfidenceMessage } from './confidence.js';
+
+import { formatResponse } from './format-response.js';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 dotenv.config({ path: join(__dirname, '..', '..', '.env') });
@@ -164,43 +170,74 @@ export async function generateCompletion(query, context) {
         { role: 'user', content: userPrompt }
       ], {
         temperature: 0.1,
-        model: 'mistral-small-latest'
+        model: 'mistral-small-latest',
+        includeCost: true  // Activer le tracking de coût
       });
     });
 
     const generationTime = Date.now() - start;
 
+     // Extraction SÉCURISÉE des métadonnées
+    const usage = data?.usage || { 
+        prompt_tokens: 0, 
+        completion_tokens: 0, 
+        total_tokens: 0 
+    };
+    
+    const costInfo = data?.cost || null
+
     return {
         data,
-        answer: data.choices[0].message.content.trim(),
-        generationTime
+        answer: data.choices?.[0]?.message?.content?.trim() || "Erreur: réponse vide",
+        generationTime,
+        usage,
+        costInfo
     };
 }
 
 // Ajouter des metrics qui s'envoient a la fin telles que le topscore, le avgscore, le retrievalms, le generationsms, le prompttokens, le generations tokens et le costUSD.
-export async function ragQuery(questions, options = { topK: 5, verbose: false }) {
-    const { matches: context, retrievalTime } = await retrieveContext(questions, options.topK);
-    if (options.verbose) {
-        console.log('Context retrieved:');
-        context.forEach((c, i) => {
-            console.log(`Chunk ${i + 1} (source: ${c.source}, score: ${c.score.toFixed(4)}):\n${c.text}\n`);
-        });
+export async function ragQuery(question, options = { topK: 5, verbose: false, showCost: true, showConfidence: true }) {
+    // 1. Récupérer le contexte
+    const { matches: context, retrievalTime } = await retrieveContext(question, options.topK);
+    
+    // 2. Calculer la confiance
+    const confidence = computeConfidence(context);
+    
+    // 3. Afficher la confiance
+    if (options.showConfidence !== false) {
+        console.log(formatConfidenceMessage(confidence));
     }
-    const { answer, generationTime, data } = await generateCompletion(questions, context);
-    if (options.verbose) {
-        const metrics = {
-            topScore: context.length > 0 ? context[0].score : 0,
-            avgScore: context.reduce((sum, c) => sum + c.score, 0) / context.length || 0,
-            retrievalMs: retrievalTime,
-            generationMs: generationTime,
-            promptTokens: data.usage.prompt_tokens,
-            generationTokens: data.usage.completion_tokens,
-        };
-        console.log('Metrics:', metrics);
+    
+    // 4. SI CONFIDENCE INSUFFISANTE → PAS D'APPEL LLM
+    if (!confidence.sufficient) {
+        const notFoundMessage = "Je ne dispose pas d'informations suffisantes dans les documents fournis pour répondre à cette question.";
+        const formattedResponse = formatResponse(notFoundMessage, [], confidence.topScore);
+
+        if (options.showCost !== false) {
+            console.log(`[Stats] Input: 0 tokens | Output: 0 tokens | Coût: $0.000000 | Session total: $0.000000`);
+        }
+        
+        return formattedResponse;
     }
-    return answer;
+    
+    // Cas normal
+    const { answer, usage } = await generateCompletion(question, context);
+    
+    // Formater avec sources
+    const formattedAnswer = formatResponse(answer, context, confidence.topScore);
+    
+    if (options.showCost !== false && usage) {
+        const { formatCostMessage } = await import('../cost-tracker.js');
+        console.log(formatCostMessage(usage.prompt_tokens, usage.completion_tokens, 'mistral-small-latest'));
+    }
+    
+    return formattedAnswer;
 }
 
+// fonction pour réinitialiser les stats en session
+export function resetCostTracking() {
+    resetSessionStats();
+}
 
 // Fonction de test pour vérifier le circuit breaker
 export async function testCircuitBreaker() {

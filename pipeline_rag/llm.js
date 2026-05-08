@@ -1,5 +1,6 @@
-// llm-client.js
+
 import 'dotenv/config';
+import { calculateCost } from './cost-tracker.js';
 
 // Circuit Breaker pour protéger contre les appels en cascade
 export class CircuitBreaker {
@@ -94,57 +95,75 @@ export async function withRetry(fn, maxRetries = 3, baseDelay = 1000) {
 
 // Appel LLM robuste avec timeout et retry intégré
 export async function callLLM(messages, options = {}) {
-  const {
-    timeout = 30000,
-    model = 'mistral-small-latest',
-    temperature = 0.1,
-    maxRetries = 3,
-    retryDelay = 1000
-  } = options;
+    const {
+        timeout = 30000,
+        model = 'mistral-small-latest',
+        temperature = 0.1,
+        maxRetries = 3,
+        retryDelay = 1000,
+        includeCost = true
+    } = options;
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeout);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
 
-  const makeRequest = async () => {
-    try {
-      const response = await fetch('https://api.mistral.ai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${process.env.MISTRAL_API_KEY}`
-        },
-        body: JSON.stringify({
-          model,
-          messages,
-          temperature
-        }),
-        signal: controller.signal
-      });
+    const makeRequest = async () => {
+        try {
+            const response = await fetch('https://api.mistral.ai/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${process.env.MISTRAL_API_KEY}`
+                },
+                body: JSON.stringify({
+                    model,
+                    messages,
+                    temperature
+                }),
+                signal: controller.signal
+            });
 
-      clearTimeout(timeoutId);
+            clearTimeout(timeoutId);
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Mistral API error ${response.status}: ${errorText}`);
-      }
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`Mistral API error ${response.status}: ${errorText}`);
+            }
 
-      const data = await response.json();
-      return data;
-    } catch (error) {
-      clearTimeout(timeoutId);
-      
-      if (error.name === 'AbortError') {
-        throw new Error(`Timeout LLM après ${timeout}ms`);
-      }
-      
-      throw error;
+            const data = await response.json();
+            
+            // DEBUG: Afficher la structure de la réponse
+            console.log('🔍 API Response structure:', Object.keys(data));
+            console.log('🔍 Usage present?', !!data.usage);
+            if (data.usage) {
+                console.log('🔍 Usage keys:', Object.keys(data.usage));
+            }
+            
+            // Ajouter les métadonnées de coût si demandé
+            if (includeCost && data.usage) {
+                const { calculateCost } = await import('./cost-tracker.js');
+                const costInfo = calculateCost(
+                    data.usage.prompt_tokens,
+                    data.usage.completion_tokens,
+                    model
+                );
+                data.cost = costInfo;
+            } else if (includeCost && !data.usage) {
+                console.warn('⚠️  Aucune donnée usage dans la réponse Mistral');
+                data.usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+            }
+            
+            return data;
+        } catch (error) {
+            clearTimeout(timeoutId);
+            if (error.name === 'AbortError') {
+                throw new Error(`Timeout LLM après ${timeout}ms`);
+            }
+            throw error;
+        }
     }
-  };
-
-  // Appliquer retry sur les erreurs réessayables
-  return await withRetry(makeRequest, maxRetries, retryDelay);
+    return await withRetry(makeRequest, maxRetries, retryDelay);
 }
-
 // Version embed avec retry
 export async function callEmbeddings(texts, options = {}) {
   const {
